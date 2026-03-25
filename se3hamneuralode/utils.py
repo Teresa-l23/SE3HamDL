@@ -262,6 +262,102 @@ def traj_pose_L2_geodesic_loss(traj,traj_hat, split):
 
 
 
+################################ Loss calculation for multi-body SE(3) ################################
+
+def multibody_pose_L2_geodesic_loss(u, u_hat, n_bodies, udim=1):
+    """Compute pose loss for multi-body SE(3) trajectories.
+
+    State layout: [body_1(18), ..., body_N(18), u(udim)]
+    Per body: [x(3), R(9), v(3), w(3)]
+
+    Returns: (total_loss, x_loss, v_loss, w_loss, geo_loss)
+    """
+    body_dim = 18
+    # Split off control
+    bodies_hat, ctrl_hat = torch.split(u_hat, [n_bodies * body_dim, udim], dim=2)
+    bodies, ctrl = torch.split(u, [n_bodies * body_dim, udim], dim=2)
+
+    total_x_loss = 0.0
+    total_v_loss = 0.0
+    total_w_loss = 0.0
+    total_geo_loss = 0.0
+
+    for i in range(n_bodies):
+        off = i * body_dim
+        xi = bodies[:, :, off:off + 3].flatten(0, 1)
+        xi_hat = bodies_hat[:, :, off:off + 3].flatten(0, 1)
+        Ri = bodies[:, :, off + 3:off + 12].flatten(0, 1)
+        Ri_hat = bodies_hat[:, :, off + 3:off + 12].flatten(0, 1)
+        vi = bodies[:, :, off + 12:off + 15].flatten(0, 1)
+        vi_hat = bodies_hat[:, :, off + 12:off + 15].flatten(0, 1)
+        wi = bodies[:, :, off + 15:off + 18].flatten(0, 1)
+        wi_hat = bodies_hat[:, :, off + 15:off + 18].flatten(0, 1)
+
+        total_x_loss = total_x_loss + L2_loss(xi, xi_hat)
+        total_v_loss = total_v_loss + L2_loss(vi, vi_hat)
+        total_w_loss = total_w_loss + L2_loss(wi, wi_hat)
+
+        norm_R = compute_rotation_matrix_from_unnormalized_rotmat(Ri)
+        norm_R_hat = compute_rotation_matrix_from_unnormalized_rotmat(Ri_hat)
+        geo, _ = compute_geodesic_loss(norm_R, norm_R_hat)
+        total_geo_loss = total_geo_loss + geo
+
+    total = total_x_loss + total_v_loss + total_w_loss + total_geo_loss
+    return total, total_x_loss, total_v_loss, total_w_loss, total_geo_loss
+
+
+def multibody_pose_L2_geodesic_diff(u, u_hat, n_bodies, udim=1):
+    """Per-sample multi-body SE(3) loss (for trajectory-level evaluation)."""
+    body_dim = 18
+    bodies_hat, ctrl_hat = torch.split(u_hat, [n_bodies * body_dim, udim], dim=1)
+    bodies, ctrl = torch.split(u, [n_bodies * body_dim, udim], dim=1)
+
+    l2_diff = torch.zeros(u.shape[0], device=u.device, dtype=u.dtype)
+    geo_diff = torch.zeros(u.shape[0], device=u.device, dtype=u.dtype)
+
+    for i in range(n_bodies):
+        off = i * body_dim
+        xi = bodies[:, off:off + 3]
+        xi_hat = bodies_hat[:, off:off + 3]
+        vi = bodies[:, off + 12:off + 15]
+        vi_hat = bodies_hat[:, off + 12:off + 15]
+        wi = bodies[:, off + 15:off + 18]
+        wi_hat = bodies_hat[:, off + 15:off + 18]
+        Ri = bodies[:, off + 3:off + 12]
+        Ri_hat = bodies_hat[:, off + 3:off + 12]
+
+        l2_diff = l2_diff + torch.sum((xi - xi_hat) ** 2, dim=1)
+        l2_diff = l2_diff + torch.sum((vi - vi_hat) ** 2, dim=1)
+        l2_diff = l2_diff + torch.sum((wi - wi_hat) ** 2, dim=1)
+
+        norm_R = compute_rotation_matrix_from_unnormalized_rotmat(Ri)
+        norm_R_hat = compute_rotation_matrix_from_unnormalized_rotmat(Ri_hat)
+        _, g = compute_geodesic_loss(norm_R, norm_R_hat)
+        geo_diff = geo_diff + g
+
+    return l2_diff + geo_diff, l2_diff, geo_diff
+
+
+def traj_multibody_pose_L2_geodesic_loss(traj, traj_hat, n_bodies, udim=1):
+    """Trajectory-level multi-body SE(3) loss."""
+    total_loss = None
+    l2_loss = None
+    geo_loss = None
+    for t in range(traj.shape[0]):
+        t_total, t_l2, t_geo = multibody_pose_L2_geodesic_diff(
+            traj[t], traj_hat[t], n_bodies, udim)
+        t_total = t_total.unsqueeze(0)
+        t_l2 = t_l2.unsqueeze(0)
+        t_geo = t_geo.unsqueeze(0)
+        if total_loss is None:
+            total_loss, l2_loss, geo_loss = t_total, t_l2, t_geo
+        else:
+            total_loss = torch.cat((total_loss, t_total), dim=0)
+            l2_loss = torch.cat((l2_loss, t_l2), dim=0)
+            geo_loss = torch.cat((geo_loss, t_geo), dim=0)
+    return total_loss, l2_loss, geo_loss
+
+
 def to_pickle(thing, path): # save something
     with open(path, 'wb') as handle:
         pickle.dump(thing, handle, protocol=pickle.HIGHEST_PROTOCOL)

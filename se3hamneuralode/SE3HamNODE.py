@@ -64,7 +64,7 @@ class SE3HamNODE(torch.nn.Module):
         m_guess = torch.eye(3)
         m_guess = m_guess.reshape((1, 3, 3))
         m_guess = m_guess.repeat(batch, 1, 1).to(self.device)
-        optim1 = torch.optim.Adam(self.M_net1.parameters(), 1e-3, weight_decay=0.0)
+        optim1 = torch.optim.Adam(self.M_net1.parameters(), 1e-3, weight_decay=0.0, foreach=False)
         loss = L2_loss(m_net1_hat, m_guess)
         print("Start pretraining Mnet1!", loss.detach().cpu().numpy())
         step = 1
@@ -97,7 +97,7 @@ class SE3HamNODE(torch.nn.Module):
         inertia_guess = torch.eye(3)
         inertia_guess = inertia_guess.reshape((1, 3, 3))
         inertia_guess = inertia_guess.repeat(batch, 1, 1).to(self.device)
-        optim = torch.optim.Adam(self.M_net2.parameters(), 1e-3, weight_decay=0.0)
+        optim = torch.optim.Adam(self.M_net2.parameters(), 1e-3, weight_decay=0.0, foreach=False)
         loss = L2_loss(m_net2_hat, inertia_guess)
         print("Start pretraining Mnet2!", loss.detach().cpu().numpy())
         step = 1

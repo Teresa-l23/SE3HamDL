@@ -12,8 +12,8 @@ import time
 from torchdiffeq import odeint_adjoint as odeint
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__)) + '/data'
-PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(PARENT_DIR)
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(REPO_DIR)
 
 from se3hamneuralode import MLP, PSD
 from se3hamneuralode import SO3HamNODE
@@ -34,6 +34,13 @@ def get_args():
     parser.add_argument('--num_points', type=int, default=5,
                         help='number of evaluation points by the ODE solver, including the initial point')
     parser.add_argument('--solver', default='rk4', type=str, help='type of ODE Solver for Neural ODE')
+    parser.add_argument('--data_backend', default='gym', type=str, choices=['gym', 'chgan_rt'],
+                        help='data source backend')
+    parser.add_argument('--chgan_dt', default=0.05, type=float,
+                        help='sampling dt for CHGAN realtime generator backend')
+    parser.add_argument('--chgan_variable_physics', dest='chgan_variable_physics', action='store_true',
+                        help='use variable-physics pendulum in CHGAN backend')
+    parser.add_argument('--samples', default=64, type=int, help='number of trajectories per backend dataset')
     parser.set_defaults(feature=True)
     return parser.parse_args()
 
@@ -59,11 +66,21 @@ def train(args):
     model = SO3HamNODE(device=device, u_dim = 1, init_gain=0.5).to(device)
     num_parm = get_model_parm_nums(model)
     print('model contains {} parameters'.format(num_parm))
-    optim = torch.optim.Adam(model.parameters(), args.learn_rate, weight_decay=1e-4)
+    optim = torch.optim.Adam(model.parameters(), args.learn_rate, weight_decay=1e-4, foreach=False)
 
     # Collect data
     us = [0.0, -1.0, 1.0, -2.0, 2.0]
-    data = get_dataset(seed=args.seed, timesteps=20, save_dir=args.save_dir, us=us, ori_rep="rotmat", samples=64)
+    if args.data_backend == 'chgan_rt':
+        us = [0.0]
+    data = get_dataset(seed=args.seed,
+                       timesteps=20,
+                       save_dir=args.save_dir,
+                       us=us,
+                       ori_rep="rotmat",
+                       samples=args.samples,
+                       backend=args.data_backend,
+                       chgan_dt=args.chgan_dt,
+                       chgan_variable_physics=args.chgan_variable_physics)
     train_x, t_eval = arrange_data(data['x'], data['t'], num_points=args.num_points)
     test_x, t_eval = arrange_data(data['test_x'], data['t'], num_points=args.num_points)
     train_x_cat = np.concatenate(train_x, axis=1)
